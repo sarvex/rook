@@ -131,9 +131,7 @@ class DummyRados(object):
         json_cmd = json.loads(cmd)
         json_cmd_str = json.dumps(json_cmd, sort_keys=True)
         cmd_output = self.cmd_output_map[json_cmd_str]
-        return self.return_val, \
-            cmd_output, \
-            "{}".format(self.err_message).encode('utf-8')
+        return self.return_val, cmd_output, f"{self.err_message}".encode('utf-8')
 
     def _convert_hostname_to_ip(self, host_name):
         ip_reg_x = re.compile(r'\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3}')
@@ -143,14 +141,13 @@ class DummyRados(object):
         import random
         host_ip = self.dummy_host_ip_map.get(host_name, "")
         if not host_ip:
-            host_ip = "172.9.{}.{}".format(
-                random.randint(0, 254), random.randint(0, 254))
+            host_ip = f"172.9.{random.randint(0, 254)}.{random.randint(0, 254)}"
             self.dummy_host_ip_map[host_name] = host_ip
         del random
         return host_ip
 
     @classmethod
-    def Rados(conffile=None):
+    def Rados(cls):
         return DummyRados()
 
 
@@ -234,47 +231,54 @@ class RadosJSON:
         return argP.parse_args(args_to_parse)
 
     def validate_rgw_metadata_ec_pool_name(self):
-        if self._arg_parser.rbd_metadata_ec_pool_name:
-            rbd_metadata_ec_pool_name = self._arg_parser.rbd_metadata_ec_pool_name
-            rbd_pool_name = self._arg_parser.rbd_data_pool_name
+        if not self._arg_parser.rbd_metadata_ec_pool_name:
+            return
+        rbd_metadata_ec_pool_name = self._arg_parser.rbd_metadata_ec_pool_name
+        rbd_pool_name = self._arg_parser.rbd_data_pool_name
 
-            if rbd_pool_name == "":
-                raise ExecutionFailureException(
-                    "Flag '--rbd-data-pool-name' should not be empty"
+        if rbd_pool_name == "":
+            raise ExecutionFailureException(
+                "Flag '--rbd-data-pool-name' should not be empty"
+            )
+
+        if rbd_metadata_ec_pool_name == "":
+            raise ExecutionFailureException(
+                "Flag '--rbd-metadata-ec-pool-name' should not be empty"
+            )
+
+        cmd_json = {
+            "prefix": "osd dump", "format": "json"
+        }
+        ret_val, json_out, err_msg = self._common_cmd_json_gen(cmd_json)
+        if ret_val != 0 or len(json_out) == 0:
+            raise ExecutionFailureException(
+                (
+                    f"{cmd_json['prefix']}"
+                    + " command failed.\n"
+                    + "Error: {}".format(
+                        err_msg if ret_val != 0 else self.EMPTY_OUTPUT_LIST
+                    )
                 )
+            )
+        metadata_pool_exist, pool_exist = False, False
 
-            if rbd_metadata_ec_pool_name == "":
-                raise ExecutionFailureException(
-                    "Flag '--rbd-metadata-ec-pool-name' should not be empty"
-                )
+        for key in json_out['pools']:
+            # if erasure_code_profile is empty and pool name exists then it replica pool
+            if key['erasure_code_profile'] == "" and key['pool_name'] == rbd_metadata_ec_pool_name:
+                metadata_pool_exist = True
+            # if erasure_code_profile is not empty and pool name exists then it is ec pool
+            if key['erasure_code_profile'] and key['pool_name'] == rbd_pool_name:
+                pool_exist = True
 
-            cmd_json = {
-                "prefix": "osd dump", "format": "json"
-            }
-            ret_val, json_out, err_msg = self._common_cmd_json_gen(cmd_json)
-            if ret_val != 0 or len(json_out) == 0:
-                raise ExecutionFailureException(
-                    "{}".format(cmd_json['prefix']) + " command failed.\n" +
-                    "Error: {}".format(err_msg if ret_val !=
-                                       0 else self.EMPTY_OUTPUT_LIST)
-                )
-            metadata_pool_exist, pool_exist = False, False
-
-            for key in json_out['pools']:
-                # if erasure_code_profile is empty and pool name exists then it replica pool
-                if key['erasure_code_profile'] == "" and key['pool_name'] == rbd_metadata_ec_pool_name:
-                    metadata_pool_exist = True
-                # if erasure_code_profile is not empty and pool name exists then it is ec pool
-                if key['erasure_code_profile'] and key['pool_name'] == rbd_pool_name:
-                    pool_exist = True
-
-            if not metadata_pool_exist:
-                raise ExecutionFailureException(
-                    "Provided rbd_ec_metadata_pool name, {}, does not exist".format(rbd_metadata_ec_pool_name))
-            if not pool_exist:
-                raise ExecutionFailureException(
-                    "Provided rbd_data_pool name, {}, does not exist".format(rbd_pool_name))
-            return rbd_metadata_ec_pool_name
+        if not metadata_pool_exist:
+            raise ExecutionFailureException(
+                f"Provided rbd_ec_metadata_pool name, {rbd_metadata_ec_pool_name}, does not exist"
+            )
+        if not pool_exist:
+            raise ExecutionFailureException(
+                f"Provided rbd_data_pool name, {rbd_pool_name}, does not exist"
+            )
+        return rbd_metadata_ec_pool_name
 
     def dry_run(self, msg):
         if self._arg_parser.dry_run:
@@ -296,25 +300,22 @@ class RadosJSON:
             ipv4, port = endpoint_str.split(':')
         except ValueError:
             raise ExecutionFailureException(
-                "Not a proper endpoint: {}, <IPv4>:<PORT>, format is expected".format(endpoint_str))
+                f"Not a proper endpoint: {endpoint_str}, <IPv4>:<PORT>, format is expected"
+            )
         ipParts = ipv4.split('.')
         if len(ipParts) != 4:
-            raise ExecutionFailureException(
-                "Not a valid IP address: {}".format(ipv4))
+            raise ExecutionFailureException(f"Not a valid IP address: {ipv4}")
         for eachPart in ipParts:
             if not eachPart.isdigit():
-                raise ExecutionFailureException(
-                    "IP address parts should be numbers: {}".format(ipv4))
+                raise ExecutionFailureException(f"IP address parts should be numbers: {ipv4}")
             intPart = int(eachPart)
             if intPart < 0 or intPart > 254:
-                raise ExecutionFailureException(
-                    "Out of range IP addresses: {}".format(ipv4))
+                raise ExecutionFailureException(f"Out of range IP addresses: {ipv4}")
         if not port.isdigit():
-            raise ExecutionFailureException("Port not valid: {}".format(port))
+            raise ExecutionFailureException(f"Port not valid: {port}")
         intPort = int(port)
         if intPort < 1 or intPort > 2**16-1:
-            raise ExecutionFailureException(
-                "Out of range port number: {}".format(port))
+            raise ExecutionFailureException(f"Out of range port number: {port}")
         return False
 
     def endpoint_dial(self, endpoint_str, timeout=3, cert=None):
@@ -325,7 +326,7 @@ class RadosJSON:
         protocols = ["http", "https"]
         for prefix in protocols:
             try:
-                ep = "{}://{}".format(prefix, endpoint_str)
+                ep = f"{prefix}://{endpoint_str}"
                 # If verify is set to a path to a directory,
                 # the directory must have been processed using the c_rehash utility supplied with OpenSSL.
                 if prefix == "https" and cert and self._arg_parser.rgw_skip_tls:
@@ -339,7 +340,8 @@ class RadosJSON:
             except:
                 continue
         raise ExecutionFailureException(
-            "unable to connect to endpoint: {}".format(endpoint_str))
+            f"unable to connect to endpoint: {endpoint_str}"
+        )
 
     def __init__(self, arg_list=None):
         self.out_map = {}
@@ -383,14 +385,11 @@ class RadosJSON:
         cmd = json.dumps(cmd_json, sort_keys=True)
         ret_val, cmd_out, err_msg = self.cluster.mon_command(cmd, b'')
         if self._arg_parser.verbose:
-            print("Command Input: {}".format(cmd))
-            print("Return Val: {}\nCommand Output: {}\nError Message: {}\n----------\n".format(
-                  ret_val, cmd_out, err_msg))
-        json_out = {}
-        # if there is no error (i.e; ret_val is ZERO) and 'cmd_out' is not empty
-        # then convert 'cmd_out' to a json output
-        if ret_val == 0 and cmd_out:
-            json_out = json.loads(cmd_out)
+            print(f"Command Input: {cmd}")
+            print(
+                f"Return Val: {ret_val}\nCommand Output: {cmd_out}\nError Message: {err_msg}\n----------\n"
+            )
+        json_out = json.loads(cmd_out) if ret_val == 0 and cmd_out else {}
         return ret_val, json_out, err_msg
 
     def get_ceph_external_mon_data(self):
@@ -401,13 +400,16 @@ class RadosJSON:
         # if there is an unsuccessful attempt,
         if ret_val != 0 or len(json_out) == 0:
             raise ExecutionFailureException(
-                "'quorum_status' command failed.\n" +
-                "Error: {}".format(err_msg if ret_val != 0 else self.EMPTY_OUTPUT_LIST))
+                (
+                    "'quorum_status' command failed.\n"
+                    + f"Error: {err_msg if ret_val != 0 else self.EMPTY_OUTPUT_LIST}"
+                )
+            )
         q_leader_name = json_out['quorum_leader_name']
         q_leader_details = {}
         q_leader_matching_list = [l for l in json_out['monmap']['mons']
                                   if l['name'] == q_leader_name]
-        if len(q_leader_matching_list) == 0:
+        if not q_leader_matching_list:
             raise ExecutionFailureException("No matching 'mon' details found")
         q_leader_details = q_leader_matching_list[0]
         # get the address vector of the quorum-leader
@@ -421,18 +423,16 @@ class RadosJSON:
             raise ExecutionFailureException(
                 "Only 'v2' address type is enabled, user should also enable 'v1' type as well")
         ip_port = str(q_leader_details['public_addr'].split('/')[0])
-        return "{}={}".format(str(q_leader_name), ip_port)
+        return f"{str(q_leader_name)}={ip_port}"
 
     def _join_host_port(self, endpoint, port):
-        port = "{}".format(port)
+        port = f"{port}"
         # regex to check the given endpoint is enclosed in square brackets
         ipv6_regx = re.compile(r'^\[[^]]*\]$')
         # endpoint has ':' in it and if not (already) enclosed in square brackets
         if endpoint.count(':') and not ipv6_regx.match(endpoint):
-            endpoint = '[{}]'.format(endpoint)
-        if not port:
-            return endpoint
-        return ':'.join([endpoint, port])
+            endpoint = f'[{endpoint}]'
+        return endpoint if not port else ':'.join([endpoint, port])
 
     def _convert_hostname_to_ip(self, host_name):
         # if 'cluster' instance is a dummy type,
@@ -458,8 +458,11 @@ class RadosJSON:
             # if there is an unsuccessful attempt,
             if ret_val != 0 or len(json_out) == 0:
                 raise ExecutionFailureException(
-                    "'mgr services' command failed.\n" +
-                    "Error: {}".format(err_msg if ret_val != 0 else self.EMPTY_OUTPUT_LIST))
+                    (
+                        "'mgr services' command failed.\n"
+                        + f"Error: {err_msg if ret_val != 0 else self.EMPTY_OUTPUT_LIST}"
+                    )
+                )
             monitoring_endpoint = json_out.get('mgrmap', {}).get(
                 'services', {}).get('prometheus', '')
             if not monitoring_endpoint:
@@ -467,17 +470,18 @@ class RadosJSON:
                     "'prometheus' service not found, is the exporter enabled?'.\n")
             # now check the stand-by mgr-s
             standby_arr = json_out.get('mgrmap', {}).get('standbys', [])
-            for each_standby in standby_arr:
-                if 'name' in each_standby.keys():
-                    standby_mgrs.append(each_standby['name'])
+            standby_mgrs.extend(
+                each_standby['name']
+                for each_standby in standby_arr
+                if 'name' in each_standby.keys()
+            )
             try:
                 parsed_endpoint = urlparse(monitoring_endpoint)
             except ValueError:
-                raise ExecutionFailureException(
-                    "invalid endpoint: {}".format(monitoring_endpoint))
+                raise ExecutionFailureException(f"invalid endpoint: {monitoring_endpoint}")
             monitoring_endpoint_ip_list = parsed_endpoint.hostname
             if not monitoring_endpoint_port:
-                monitoring_endpoint_port = "{}".format(parsed_endpoint.port)
+                monitoring_endpoint_port = f"{parsed_endpoint.port}"
 
         # if monitoring endpoint port is not set, put a default mon port
         if not monitoring_endpoint_port:
@@ -503,12 +507,11 @@ class RadosJSON:
             mgr_ips = []
             for each_standby_mgr in standby_mgrs:
                 failed_ip = each_standby_mgr
-                mgr_ips.append(
-                    self._convert_hostname_to_ip(each_standby_mgr))
+                mgr_ips.append(self._convert_hostname_to_ip(failed_ip))
         except:
             raise ExecutionFailureException(
-                "Conversion of host: {} to IP failed. "
-                "Please enter the IP addresses of all the ceph-mgrs with the '--monitoring-endpoint' flag".format(failed_ip))
+                f"Conversion of host: {failed_ip} to IP failed. Please enter the IP addresses of all the ceph-mgrs with the '--monitoring-endpoint' flag"
+            )
         monitoring_endpoint = self._join_host_port(
             monitoring_endpoint_ip, monitoring_endpoint_port)
         self._invalid_endpoint(monitoring_endpoint)
@@ -520,12 +523,9 @@ class RadosJSON:
         return all_mgr_ips_str, monitoring_endpoint_port
 
     def check_user_exist(self,user):
-        cmd_json = {"prefix": "auth get", "entity": "{}".format(
-            user), "format": "json"}
+        cmd_json = {"prefix": "auth get", "entity": f"{user}", "format": "json"}
         ret_val, json_out, _ = self._common_cmd_json_gen(cmd_json)
-        if ret_val != 0 or len(json_out) == 0:
-            return ""
-        return str(json_out[0]['key'])
+        return "" if ret_val != 0 or len(json_out) == 0 else str(json_out[0]['key'])
     
     def get_cephfs_provisioner_caps_and_entity(self):
         entity = "client.csi-cephfs-provisioner"
@@ -539,11 +539,11 @@ class RadosJSON:
                     "cluster_name not found, please set the '--cluster-name' flag")
             cephfs_filesystem = self._arg_parser.cephfs_filesystem_name
             if cephfs_filesystem == "":
-                entity = "{}-{}".format(entity,cluster_name)
+                entity = f"{entity}-{cluster_name}"
             else:
-                entity = "{}-{}-{}".format(entity,cluster_name,cephfs_filesystem)
-                caps["osd"] = "allow rw tag cephfs metadata={}".format(cephfs_filesystem)
-        
+                entity = f"{entity}-{cluster_name}-{cephfs_filesystem}"
+                caps["osd"] = f"allow rw tag cephfs metadata={cephfs_filesystem}"
+
         return caps,entity
     
     def get_cephfs_node_caps_and_entity(self):
@@ -559,11 +559,11 @@ class RadosJSON:
                     "cluster_name not found, please set the '--cluster-name' flag")
             cephfs_filesystem = self._arg_parser.cephfs_filesystem_name
             if cephfs_filesystem == "":
-                entity = "{}-{}".format(entity,cluster_name)
+                entity = f"{entity}-{cluster_name}"
             else:
-                entity = "{}-{}-{}".format(entity,cluster_name,cephfs_filesystem)
-                caps["osd"] = "allow rw tag cephfs data={}".format(cephfs_filesystem)
-            
+                entity = f"{entity}-{cluster_name}-{cephfs_filesystem}"
+                caps["osd"] = f"allow rw tag cephfs data={cephfs_filesystem}"
+
         return caps,entity    
     
     def get_rbd_provisioner_caps_and_entity(self):
@@ -578,9 +578,9 @@ class RadosJSON:
             if rbd_pool_name == "" or cluster_name == "" or rados_namespace == "":
                 raise ExecutionFailureException(
                     "mandatory flags not found, please set the '--rbd-data-pool-name', '--cluster-name' and --rados-namespace flags")
-            entity = "{}-{}-{}-{}".format(entity,cluster_name,rbd_pool_name,rados_namespace)
-            caps["osd"] = "profile rbd pool={}".format(rbd_pool_name)
-        
+            entity = f"{entity}-{cluster_name}-{rbd_pool_name}-{rados_namespace}"
+            caps["osd"] = f"profile rbd pool={rbd_pool_name}"
+
         return caps,entity    
     
     def get_rbd_node_caps_and_entity(self):
@@ -594,32 +594,35 @@ class RadosJSON:
             if rbd_pool_name == "" or cluster_name == "" or rados_namespace == "":
                 raise ExecutionFailureException(
                     "mandatory flags not found, please set the '--rbd-data-pool-name', '--cluster-name' and --rados-namespace flags")
-            entity = "{}-{}-{}-{}".format(entity,cluster_name,rbd_pool_name,rados_namespace)
-            caps["osd"] = "profile rbd pool={}".format(rbd_pool_name)
-            
+            entity = f"{entity}-{cluster_name}-{rbd_pool_name}-{rados_namespace}"
+            caps["osd"] = f"profile rbd pool={rbd_pool_name}"
+
         return caps,entity
     
     def get_caps_and_entity(self, user_name):
         if "client.csi-cephfs-provisioner" in user_name:
-            if "client.csi-cephfs-provisioner" != user_name:
+            if user_name != "client.csi-cephfs-provisioner":
                 self._arg_parser.restricted_auth_permission = True
             return self.get_cephfs_provisioner_caps_and_entity()
         elif "client.csi-cephfs-node" in user_name:
-            if "client.csi-cephfs-node" != user_name:
+            if user_name != "client.csi-cephfs-node":
                 self._arg_parser.restricted_auth_permission = True
             return self.get_cephfs_node_caps_and_entity()
         elif "client.csi-rbd-provisioner" in user_name:
-            if "client.csi-rbd-provisioner" != user_name:
+            if user_name != "client.csi-rbd-provisioner":
                 self._arg_parser.restricted_auth_permission = True
             return self.get_rbd_provisioner_caps_and_entity()
         elif "client.csi-rbd-node" in user_name:
-            if "client.csi-rbd-node" != user_name:
+            if user_name != "client.csi-rbd-node":
                 self._arg_parser.restricted_auth_permission = True
             return self.get_rbd_node_caps_and_entity()             
-        
+
         raise ExecutionFailureException(
-                "no user found with user_name: {} ,".format(user_name)
-                + "get_caps_and_entity command failed.\n")    
+            (
+                f"no user found with user_name: {user_name} ,"
+                + "get_caps_and_entity command failed.\n"
+            )
+        )    
     
     def create_cephCSIKeyring_user(self,user):
         '''
@@ -630,20 +633,23 @@ class RadosJSON:
                         "entity": entity,
                         "caps": [cap for cap_list in list(caps.items()) for cap in cap_list],
                         "format": "json"}
-        
+
         if self._arg_parser.dry_run:
             return self.dry_run("ceph " + cmd_json['prefix'] + " " + cmd_json['entity'] + " " + " ".join(cmd_json['caps']))
         # check if user already exist
         user_key = self.check_user_exist(entity)
         if user_key != "":
             return user_key
-        
+
         ret_val, json_out, err_msg = self._common_cmd_json_gen(cmd_json)
         # if there is an unsuccessful attempt,
         if ret_val != 0 or len(json_out) == 0:
             raise ExecutionFailureException(
-                "'auth get-or-create {}' command failed.\n".format(user) +
-                "Error: {}".format(err_msg if ret_val != 0 else self.EMPTY_OUTPUT_LIST))
+                (
+                    f"'auth get-or-create {user}' command failed.\n"
+                    + f"Error: {err_msg if ret_val != 0 else self.EMPTY_OUTPUT_LIST}"
+                )
+            )
         return str(json_out[0]['key'])
 
     def get_cephfs_data_pool_details(self):
@@ -660,45 +666,41 @@ class RadosJSON:
             # '--cephfs-filesystem-name' or '--cephfs-data-pool-name' arguments,
             # raise an exception as we are unable to verify the args
             raise ExecutionFailureException(
-                "'fs ls' ceph call failed with error: {}".format(err_msg))
+                f"'fs ls' ceph call failed with error: {err_msg}"
+            )
 
         matching_json_out = {}
         # if '--cephfs-filesystem-name' argument is provided,
         # check whether the provided filesystem-name exists or not
         if self._arg_parser.cephfs_filesystem_name:
-            # get the matching list
-            matching_json_out_list = [matched for matched in json_out
-                                      if str(matched['name']) == self._arg_parser.cephfs_filesystem_name]
-            # unable to find a matching fs-name, raise an error
-            if len(matching_json_out_list) == 0:
+            if matching_json_out_list := [
+                matched
+                for matched in json_out
+                if str(matched['name']) == self._arg_parser.cephfs_filesystem_name
+            ]:
+                matching_json_out = matching_json_out_list[0]
+            else:
                 raise ExecutionFailureException(
                     ("Filesystem provided, '{}', " +
                      "is not found in the fs-list: '{}'").format(
                         self._arg_parser.cephfs_filesystem_name,
                         [str(x['name']) for x in json_out]))
-            matching_json_out = matching_json_out_list[0]
-        # if cephfs filesystem name is not provided,
-        # try to get a default fs name by doing the following
-        else:
-            # a. check if there is only one filesystem is present
-            if len(json_out) == 1:
-                matching_json_out = json_out[0]
-            # b. or else, check if data_pool name is provided
-            elif self._arg_parser.cephfs_data_pool_name:
-                # and if present, check whether there exists a fs which has the data_pool
-                for eachJ in json_out:
-                    if self._arg_parser.cephfs_data_pool_name in eachJ['data_pools']:
-                        matching_json_out = eachJ
-                        break
+        elif len(json_out) == 1:
+            matching_json_out = json_out[0]
+        elif self._arg_parser.cephfs_data_pool_name:
+            # and if present, check whether there exists a fs which has the data_pool
+            for eachJ in json_out:
+                if self._arg_parser.cephfs_data_pool_name in eachJ['data_pools']:
+                    matching_json_out = eachJ
+                    break
                 # if there is no matching fs exists, that means provided data_pool name is invalid
-                if not matching_json_out:
-                    raise ExecutionFailureException(
-                        "Provided data_pool name, {}, does not exists".format(
-                            self._arg_parser.cephfs_data_pool_name))
-            # c. if nothing is set and couldn't find a default,
-            else:
-                # just return silently
-                return
+            if not matching_json_out:
+                raise ExecutionFailureException(
+                    f"Provided data_pool name, {self._arg_parser.cephfs_data_pool_name}, does not exists"
+                )
+        else:
+            # just return silently
+            return
 
         if matching_json_out:
             self._arg_parser.cephfs_filesystem_name = str(
@@ -713,27 +715,19 @@ class RadosJSON:
                 # if the provided name is not matching with the one in the list
                 if self._arg_parser.cephfs_data_pool_name not in matching_json_out['data_pools']:
                     raise ExecutionFailureException(
-                        "{}: '{}', {}: {}".format(
-                            "Provided data-pool-name",
-                            self._arg_parser.cephfs_data_pool_name,
-                            "doesn't match from the data-pools' list",
-                            [str(x) for x in matching_json_out['data_pools']]))
-            # if data_pool name is not provided,
-            # then try to find a default data pool name
+                        f"Provided data-pool-name: '{self._arg_parser.cephfs_data_pool_name}', doesn't match from the data-pools' list: {[str(x) for x in matching_json_out['data_pools']]}"
+                    )
+            elif len(matching_json_out['data_pools']) == 0:
+                return
             else:
-                # if no data_pools exist, silently return
-                if len(matching_json_out['data_pools']) == 0:
-                    return
                 self._arg_parser.cephfs_data_pool_name = str(
                     matching_json_out['data_pools'][0])
             # if there are more than one 'data_pools' exist,
             # then warn the user that we are using the selected name
             if len(matching_json_out['data_pools']) > 1:
-                print("{}: {}\n{}: '{}'\n".format(
-                    "WARNING: Multiple data pools detected",
-                    [str(x) for x in matching_json_out['data_pools']],
-                    "Using the data-pool",
-                    self._arg_parser.cephfs_data_pool_name))
+                print(
+                    f"WARNING: Multiple data pools detected: {[str(x) for x in matching_json_out['data_pools']]}\nUsing the data-pool: '{self._arg_parser.cephfs_data_pool_name}'\n"
+                )
 
     def create_checkerKey(self):
         cmd_json = {"prefix": "auth get-or-create",
@@ -748,8 +742,11 @@ class RadosJSON:
         # if there is an unsuccessful attempt,
         if ret_val != 0 or len(json_out) == 0:
             raise ExecutionFailureException(
-                "'auth get-or-create {}' command failed\n".format(self.run_as_user) +
-                "Error: {}".format(err_msg if ret_val != 0 else self.EMPTY_OUTPUT_LIST))
+                (
+                    f"'auth get-or-create {self.run_as_user}' command failed\n"
+                    + f"Error: {err_msg if ret_val != 0 else self.EMPTY_OUTPUT_LIST}"
+                )
+            )
         return str(json_out[0]['key'])
 
     def get_ceph_dashboard_link(self):
@@ -760,9 +757,7 @@ class RadosJSON:
         # if there is an unsuccessful attempt,
         if ret_val != 0 or len(json_out) == 0:
             return None
-        if not 'dashboard' in json_out:
-            return None
-        return json_out['dashboard']
+        return None if 'dashboard' not in json_out else json_out['dashboard']
 
     def create_rgw_admin_ops_user(self):
         cmd = ['radosgw-admin', 'user', 'create', '--uid', self.EXTERNAL_RGW_ADMIN_OPS_USER_NAME, '--display-name',
@@ -782,12 +777,10 @@ class RadosJSON:
                     output = subprocess.check_output(cmd,
                                                      stderr=subprocess.PIPE)
                 except subprocess.CalledProcessError as execErr:
-                    err_msg = "failed to execute command %s. Output: %s. Code: %s. Error: %s" % (
-                        cmd, execErr.output, execErr.returncode, execErr.stderr)
+                    err_msg = f"failed to execute command {cmd}. Output: {execErr.output}. Code: {execErr.returncode}. Error: {execErr.stderr}"
                     raise Exception(err_msg)
             else:
-                err_msg = "failed to execute command %s. Output: %s. Code: %s. Error: %s" % (
-                    cmd, execErr.output, execErr.returncode, execErr.stderr)
+                err_msg = f"failed to execute command {cmd}. Output: {execErr.output}. Code: {execErr.returncode}. Error: {execErr.stderr}"
                 raise Exception(err_msg)
 
         jsonoutput = json.loads(output)
@@ -810,8 +803,7 @@ class RadosJSON:
 
         for pool in pools_to_validate:
             if not self.cluster.pool_exists(pool):
-                raise ExecutionFailureException(
-                    "The provided pool, '{}', does not exist".format(pool))
+                raise ExecutionFailureException(f"The provided pool, '{pool}', does not exist")
     
     def validate_rados_namespace(self):
         rbd_pool_name = self._arg_parser.rbd_data_pool_name
@@ -821,9 +813,9 @@ class RadosJSON:
         rbd_inst = rbd.RBD()
         ioctx = self.cluster.open_ioctx(rbd_pool_name)
         if rbd_inst.namespace_exists(ioctx, rados_namespace) == False:
-           raise ExecutionFailureException(
-                    ("The provided rados Namespace, '{}', is not found in the pool '{}'").format(
-                        rados_namespace,rbd_pool_name))
+            raise ExecutionFailureException(
+                f"The provided rados Namespace, '{rados_namespace}', is not found in the pool '{rbd_pool_name}'"
+            )
     
     def _gen_output_map(self):
         if self.out_map:
@@ -869,7 +861,7 @@ class RadosJSON:
         shOutIO = StringIO()
         for k, v in self.out_map.items():
             if v and k not in self._excluded_keys:
-                shOutIO.write('export {}={}{}'.format(k, v, LINESEP))
+                shOutIO.write(f'export {k}={v}{LINESEP}')
         shOut = shOutIO.getvalue()
         shOutIO.close()
         return shOut
